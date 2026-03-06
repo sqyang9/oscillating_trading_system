@@ -1,0 +1,18 @@
+__pycache__/
+.pytest_cache/
+
+# data/artifacts
+btc_data/
+outputs/
+archive/
+
+# python cache
+*.py[cod]
+*$py.class
+
+# system/logs
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.zip

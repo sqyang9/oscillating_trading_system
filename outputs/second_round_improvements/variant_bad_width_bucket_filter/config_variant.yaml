@@ -1,0 +1,121 @@
+data:
+  symbol: BTC/USDT
+  input_5m: btc_data/closed/btc_usdt_swap_5m_closed.csv
+  input_4h: btc_data/closed/btc_usdt_swap_4h_closed.csv
+  use_5m_for_1h: true
+  output_dir: outputs
+local_box:
+  rolling_window: 72
+  min_periods: 24
+  lower_quantile: 0.2
+  upper_quantile: 0.8
+  pivot_left: 2
+  pivot_right: 2
+  pivot_memory: 8
+  touch_tolerance: 0.12
+  repeated_test_window: 24
+  repeated_test_min_gap: 2
+  method_weights:
+    quantile: 0.5
+    pivot: 0.3
+    repeated_test: 0.2
+  min_width_pct: 0.001
+  max_width_pct: 0.08
+  stable_change_window: 12
+  drift_window: 24
+  drift_threshold: 0.35
+  squeeze_width_pct: 0.01
+  min_methods_each_side: 1
+event_false_break:
+  overshoot_width_mult: 0.08
+  reentry_window: 6
+  min_confirmations: 2
+  recapture_to_mid_frac: 0.4
+  momentum_lookback: 3
+  reversal_wick_ratio: 0.45
+  volume_confirmation_enabled: false
+  volume_confirmation_mode: require
+  volume_lookback: 20
+  volume_min_periods: 10
+  breakout_volume_max_ratio: 1.15
+  reentry_volume_min_ratio: 0.95
+  reentry_vs_breakout_min_ratio: 1.05
+event_box_initiation:
+  edge_tolerance_width_frac: 0.12
+  min_confirmations: 2
+  momentum_lookback: 3
+  reversal_body_frac: 0.25
+execution:
+  width_pct_min: 0.001
+  width_pct_max: 0.06
+  method_agreement_min: 0.34
+  transition_risk_max: 0.65
+  confidence_min_false_break: 0.45
+  confidence_min_boundary: 0.5
+  side_cooldown_bars_false_break: 4
+  side_cooldown_bars_boundary: 6
+  allow_states:
+  - STABLE
+  - SQUEEZE
+  false_break_regime_mode: down_only
+  regime_lookback_hours: 720
+  regime_down_low: -0.2
+  regime_down_high: -0.05
+  regime_up_low: 0.05
+  regime_up_high: 0.2
+  false_break_up_long_only: false
+  allow_warmup_trades: true
+  bad_width_bucket_filter_enabled: true
+  bad_width_bucket_min_pct: 0.01
+  bad_width_bucket_max_pct: 0.015
+  expected_value_filter_enabled: false
+  expected_value_mode: to_midline
+  min_reward_to_cost_ratio: 1.5
+  expected_value_round_trip_cost_rate: null
+risk:
+  atr_window: 14
+  atr_mult: 1.1
+  box_stop_mult: 0.6
+  min_stop_pct: 0.002
+  max_hold_bars: 30
+  early_progress_bars: 16
+  early_progress_min_return: 0.0003
+  state_stop_grace_bars: 2
+  side_cooldown_bars: 4
+  circuit_breaker_loss_streak: 3
+  circuit_breaker_pause_bars: 16
+  take_profit_enabled: false
+  take_profit_mode: midline
+  early_failure_filter_enabled: false
+  early_failure_bars: 6
+  early_failure_min_progress: 0.003
+  early_failure_max_adverse: 0.008
+  early_failure_scope: all
+  early_failure_confirm_threshold: 2
+  early_failure_width_min_pct: 0.01
+  early_failure_width_max_pct: 0.015
+backtest:
+  fee_bps_per_leg: 5
+  slippage_bps_per_leg: 2
+  half_spread_bps_per_leg: 1
+  combine_mode: equal_weight
+  engine_weights:
+    false_break: 1.0
+    boundary: 0.0
+  annualization_hours: 8760
+ab_study:
+  run_baseline: true
+  base_variant_name: baseline_regime
+  variant_a:
+    name: A_late_early_progress
+    risk_overrides:
+      early_progress_bars: 16
+      early_progress_min_return: 0.0003
+  variant_b:
+    name: B_strict_entry_confirm
+    event_false_break_overrides:
+      min_confirmations: 3
+    execution_overrides:
+      confidence_min_false_break: 0.62
+visual:
+  max_plot_rows: 2500

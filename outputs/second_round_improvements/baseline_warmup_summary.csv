@@ -1,0 +1,6 @@
+metric,value
+warmup_trades,9
+warmup_entry_start,2019-12-21 21:00:00+00:00
+warmup_entry_end,2020-01-08 16:00:00+00:00
+warmup_total_return,-0.02788878411650275
+non_warmup_total_return,0.6276601151134253

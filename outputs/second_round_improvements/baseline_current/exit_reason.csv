@@ -1,0 +1,9 @@
+engine,exit_reason,count
+boundary,price_stop,621
+boundary,state_stop,31
+boundary,time_stop_early,371
+boundary,time_stop_max,304
+false_break,price_stop,68
+false_break,state_stop,3
+false_break,time_stop_early,29
+false_break,time_stop_max,45

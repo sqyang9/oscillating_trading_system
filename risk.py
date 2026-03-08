@@ -22,6 +22,28 @@ class RiskConfig:
     side_cooldown_bars: int = 4
     circuit_breaker_loss_streak: int = 3
     circuit_breaker_pause_bars: int = 16
+    take_profit_enabled: bool = False
+    take_profit_mode: str = "midline"  # midline | opposite_edge
+    early_failure_filter_enabled: bool = False
+    early_failure_bars: int = 6
+    early_failure_min_progress: float = 0.003
+    early_failure_max_adverse: float = 0.008
+    early_failure_scope: str = "all"  # all | low_confirm_only | width_bucket_only | warmup_only
+    early_failure_confirm_threshold: int = 2
+    early_failure_width_min_pct: float = 0.010
+    early_failure_width_max_pct: float = 0.015
+
+    def normalized_take_profit_mode(self) -> str:
+        mode = str(self.take_profit_mode).strip().lower()
+        if mode in {"midline", "opposite_edge"}:
+            return mode
+        return "midline"
+
+    def normalized_early_failure_scope(self) -> str:
+        scope = str(self.early_failure_scope).strip().lower()
+        if scope in {"all", "low_confirm_only", "width_bucket_only", "warmup_only"}:
+            return scope
+        return "all"
 
 
 def compute_atr(df: pd.DataFrame, window: int) -> pd.Series:
@@ -37,6 +59,66 @@ def compute_atr(df: pd.DataFrame, window: int) -> pd.Series:
 def _effective_close(close: pd.Series) -> pd.Series:
     """Causal fallback price for gap bars: last known close in-sequence."""
     return close.ffill()
+
+
+def _take_profit_target(cand: dict, side: int, cfg: RiskConfig) -> float:
+    if not cfg.take_profit_enabled:
+        return np.nan
+
+    entry_price = float(cand.get("price", np.nan))
+    mode = cfg.normalized_take_profit_mode()
+    if side > 0:
+        target = float(cand.get("box_midline", np.nan)) if mode == "midline" else float(cand.get("box_upper_edge", np.nan))
+        if not np.isfinite(target) or not np.isfinite(entry_price) or target <= entry_price:
+            return np.nan
+        return target
+
+    if side < 0:
+        target = float(cand.get("box_midline", np.nan)) if mode == "midline" else float(cand.get("box_lower_edge", np.nan))
+        if not np.isfinite(target) or not np.isfinite(entry_price) or target >= entry_price:
+            return np.nan
+        return target
+
+    return np.nan
+
+
+def _early_failure_scope_match(active: dict, cfg: RiskConfig) -> bool:
+    if not cfg.early_failure_filter_enabled:
+        return False
+
+    scope = cfg.normalized_early_failure_scope()
+    if scope == "all":
+        return True
+    if scope == "low_confirm_only":
+        confirms = float(active.get("entry_base_confirms", np.nan))
+        return np.isfinite(confirms) and confirms <= float(cfg.early_failure_confirm_threshold)
+    if scope == "width_bucket_only":
+        width_pct = float(active.get("entry_box_width_pct", np.nan))
+        return np.isfinite(width_pct) and cfg.early_failure_width_min_pct <= width_pct < cfg.early_failure_width_max_pct
+    if scope == "warmup_only":
+        return bool(active.get("entry_warmup", False))
+    return False
+
+
+def _early_failure_excursions(bars: pd.DataFrame, entry_idx: int, now_idx: int, side: int, entry_price: float) -> tuple[float, float]:
+    if now_idx <= entry_idx or not np.isfinite(entry_price) or entry_price <= 0.0:
+        return 0.0, 0.0
+
+    window = bars.iloc[entry_idx + 1 : now_idx + 1]
+    if window.empty:
+        return 0.0, 0.0
+
+    hi = pd.to_numeric(window["high"], errors="coerce").max()
+    lo = pd.to_numeric(window["low"], errors="coerce").min()
+
+    if side > 0:
+        favorable = max((hi / entry_price - 1.0), 0.0) if np.isfinite(hi) else 0.0
+        adverse = max((1.0 - lo / entry_price), 0.0) if np.isfinite(lo) else 0.0
+    else:
+        favorable = max((1.0 - lo / entry_price), 0.0) if np.isfinite(lo) else 0.0
+        adverse = max((hi / entry_price - 1.0), 0.0) if np.isfinite(hi) else 0.0
+
+    return favorable, adverse
 
 
 def _apply_engine_risk(
@@ -88,11 +170,11 @@ def _apply_engine_risk(
                 (cfg.box_stop_mult * width) if np.isfinite(width) else 0.0,
             )
             hold = i - active["entry_idx"]
-            close_price = b.at[i, "close"]
             effective_close = b.at[i, "effective_close"]
 
             exit_price = np.nan
             exit_reason = ""
+            early_favorable, early_adverse = _early_failure_excursions(b, active["entry_idx"], i, side, entry_price)
 
             if side > 0 and np.isfinite(b.at[i, "low"]) and b.at[i, "low"] <= (entry_price - stop_dist):
                 exit_price = entry_price - stop_dist
@@ -100,6 +182,16 @@ def _apply_engine_risk(
             elif side < 0 and np.isfinite(b.at[i, "high"]) and b.at[i, "high"] >= (entry_price + stop_dist):
                 exit_price = entry_price + stop_dist
                 exit_reason = "price_stop"
+
+            tp_target = active.get("take_profit_target", np.nan)
+            tp_mode = active.get("take_profit_mode", cfg.normalized_take_profit_mode())
+            if exit_reason == "" and np.isfinite(tp_target):
+                if side > 0 and np.isfinite(b.at[i, "high"]) and b.at[i, "high"] >= tp_target:
+                    exit_price = tp_target
+                    exit_reason = f"take_profit_{tp_mode}"
+                elif side < 0 and np.isfinite(b.at[i, "low"]) and b.at[i, "low"] <= tp_target:
+                    exit_price = tp_target
+                    exit_reason = f"take_profit_{tp_mode}"
 
             state_bad = (
                 (not bool(b.at[i, "box_valid"]))
@@ -111,6 +203,17 @@ def _apply_engine_risk(
 
             mark_price = effective_close if np.isfinite(effective_close) else entry_price
             unreal = side * (mark_price / entry_price - 1.0)
+            if (
+                exit_reason == ""
+                and hold >= cfg.early_failure_bars
+                and _early_failure_scope_match(active, cfg)
+                and early_favorable < cfg.early_failure_min_progress
+                and early_adverse > cfg.early_failure_max_adverse
+                and np.isfinite(mark_price)
+            ):
+                exit_price = mark_price
+                exit_reason = "early_failure"
+
             if exit_reason == "" and hold >= cfg.early_progress_bars and unreal < cfg.early_progress_min_return and np.isfinite(mark_price):
                 exit_price = mark_price
                 exit_reason = "time_stop_early"
@@ -133,6 +236,12 @@ def _apply_engine_risk(
                         "gross_return": gross_return,
                         "exit_reason": exit_reason,
                         "entry_confidence": active["entry_confidence"],
+                        "entry_base_confirms": active.get("entry_base_confirms", np.nan),
+                        "entry_box_width_pct": active.get("entry_box_width_pct", np.nan),
+                        "entry_warmup": active.get("entry_warmup", False),
+                        "take_profit_target": active.get("take_profit_target", np.nan),
+                        "early_favorable_excursion": early_favorable,
+                        "early_adverse_excursion": early_adverse,
                     }
                 )
                 logs.append(
@@ -231,12 +340,18 @@ def _apply_engine_risk(
                     )
                     continue
 
+                tp_target = _take_profit_target(cand, side, cfg)
                 active = {
                     "side": side,
                     "entry_idx": i,
                     "entry_time": now_ts,
                     "entry_price": entry_price,
                     "entry_confidence": float(cand.get("event_confidence", 0.0)),
+                    "entry_base_confirms": float(cand.get("event_base_confirms", np.nan)),
+                    "entry_box_width_pct": float(cand.get("box_width_pct", np.nan)),
+                    "entry_warmup": bool(cand.get("entry_warmup", False)),
+                    "take_profit_target": tp_target,
+                    "take_profit_mode": cfg.normalized_take_profit_mode(),
                 }
                 logs.append(
                     {
@@ -250,7 +365,6 @@ def _apply_engine_risk(
                 )
 
     if active is not None:
-        # Exit remaining position at the last available finite close after entry.
         exit_slice = b.loc[active["entry_idx"] :, ["timestamp", "effective_close"]].dropna(subset=["effective_close"])
         if exit_slice.empty:
             exit_time = b.at[len(b) - 1, "timestamp"]
@@ -274,6 +388,12 @@ def _apply_engine_risk(
                 "gross_return": gross_return,
                 "exit_reason": "end_of_data",
                 "entry_confidence": active["entry_confidence"],
+                "entry_base_confirms": active.get("entry_base_confirms", np.nan),
+                "entry_box_width_pct": active.get("entry_box_width_pct", np.nan),
+                "entry_warmup": active.get("entry_warmup", False),
+                "take_profit_target": active.get("take_profit_target", np.nan),
+                "early_favorable_excursion": np.nan,
+                "early_adverse_excursion": np.nan,
             }
         )
 

@@ -30,12 +30,26 @@ class ExecutionConfig:
     regime_up_low: float = 0.05
     regime_up_high: float = 0.20
     false_break_up_long_only: bool = False
+    allow_warmup_trades: bool = True
+    bad_width_bucket_filter_enabled: bool = False
+    bad_width_bucket_min_pct: float = 0.010
+    bad_width_bucket_max_pct: float = 0.015
+    expected_value_filter_enabled: bool = False
+    expected_value_mode: str = "to_midline"  # to_midline | to_opposite_edge
+    min_reward_to_cost_ratio: float = 1.5
+    expected_value_round_trip_cost_rate: float | None = None
 
     def normalized_regime_mode(self) -> str:
         mode = str(self.false_break_regime_mode).strip().lower()
         if mode in {"all", "down_only", "down_up"}:
             return mode
         return "down_up"
+
+    def normalized_expected_value_mode(self) -> str:
+        mode = str(self.expected_value_mode).strip().lower()
+        if mode in {"to_midline", "to_opposite_edge"}:
+            return mode
+        return "to_midline"
 
 
 def _label_false_break_regime(ret_val: float, cfg: ExecutionConfig) -> str:
@@ -62,6 +76,48 @@ def _false_break_regime_gate(mode: str, regime: str) -> bool:
     if mode == "down_up":
         return regime in {"down", "up"}
     return True
+
+
+def _expected_target_price(raw_signal: int, row: pd.Series, mode: str) -> float:
+    if raw_signal > 0:
+        if mode == "to_midline":
+            return float(row.get("box_midline", np.nan))
+        return float(row.get("box_upper_edge", np.nan))
+    if raw_signal < 0:
+        if mode == "to_midline":
+            return float(row.get("box_midline", np.nan))
+        return float(row.get("box_lower_edge", np.nan))
+    return np.nan
+
+
+def _expected_value_metrics(raw_signal: int, row: pd.Series, cfg: ExecutionConfig) -> tuple[float, float, float, float, bool]:
+    mode = cfg.normalized_expected_value_mode()
+    price = float(row.get("close", row.get("price", np.nan)))
+    target_price = _expected_target_price(raw_signal, row, mode)
+
+    if raw_signal == 0 or not np.isfinite(price) or price <= 0.0 or not np.isfinite(target_price):
+        reward_rate = np.nan
+    else:
+        reward_rate = raw_signal * (target_price / price - 1.0)
+
+    cost_rate = float(cfg.expected_value_round_trip_cost_rate or 0.0)
+    if np.isfinite(reward_rate) and cost_rate > 0.0:
+        reward_to_cost = reward_rate / cost_rate
+    elif np.isfinite(reward_rate) and cost_rate <= 0.0 and reward_rate > 0.0:
+        reward_to_cost = np.inf
+    else:
+        reward_to_cost = np.nan
+
+    if not cfg.expected_value_filter_enabled:
+        gate = True
+    elif not np.isfinite(reward_rate) or reward_rate <= 0.0:
+        gate = False
+    elif cost_rate <= 0.0:
+        gate = True
+    else:
+        gate = bool(reward_to_cost >= cfg.min_reward_to_cost_ratio)
+
+    return target_price, reward_rate, cost_rate, reward_to_cost, gate
 
 
 def align_4h_to_1h(
@@ -137,6 +193,7 @@ def _run_single_engine(
     active_side = 0
     active_until = -10_000_000
     regime_mode = cfg.normalized_regime_mode()
+    expected_value_mode = cfg.normalized_expected_value_mode()
 
     for i in range(n):
         if i >= active_until:
@@ -160,9 +217,23 @@ def _run_single_engine(
         if engine_name == "false_break" and "fb_regime" in out.columns:
             gate_fb_regime = _false_break_regime_gate(regime_mode, fb_regime)
             gate_fb_side_bias = not (cfg.false_break_up_long_only and fb_regime == "up" and raw_signal < 0)
+            gate_allow_warmup = cfg.allow_warmup_trades or fb_regime != "warmup"
         else:
             gate_fb_regime = True
             gate_fb_side_bias = True
+            gate_allow_warmup = True
+
+        box_width_pct = float(out.at[i, "box_width_pct"]) if "box_width_pct" in out.columns and pd.notna(out.at[i, "box_width_pct"]) else np.nan
+        gate_bad_width_bucket = not (
+            engine_name == "false_break"
+            and cfg.bad_width_bucket_filter_enabled
+            and np.isfinite(box_width_pct)
+            and cfg.bad_width_bucket_min_pct <= box_width_pct < cfg.bad_width_bucket_max_pct
+        )
+
+        target_price, reward_rate, cost_rate, reward_to_cost, gate_expected_value = _expected_value_metrics(
+            raw_signal, out.iloc[i], cfg
+        )
 
         reasons: List[str] = []
         if raw_signal != 0 and not gate_range:
@@ -181,6 +252,12 @@ def _run_single_engine(
             reasons.append("regime_blocked")
         if raw_signal != 0 and engine_name == "false_break" and not gate_fb_side_bias:
             reasons.append("up_long_only")
+        if raw_signal != 0 and engine_name == "false_break" and not gate_allow_warmup:
+            reasons.append("warmup_blocked")
+        if raw_signal != 0 and engine_name == "false_break" and not gate_bad_width_bucket:
+            reasons.append("bad_width_bucket_blocked")
+        if raw_signal != 0 and cfg.expected_value_filter_enabled and not gate_expected_value:
+            reasons.append("expected_value_blocked")
 
         if raw_signal != 0 and i - last_side_entry[raw_signal] < cooldown_bars:
             reasons.append("side_cooldown")
@@ -209,12 +286,23 @@ def _run_single_engine(
                 "fb_regime_ret": fb_regime_ret,
                 "gate_fb_regime": gate_fb_regime,
                 "gate_fb_side_bias": gate_fb_side_bias,
+                "gate_allow_warmup": gate_allow_warmup,
+                "gate_bad_width_bucket": gate_bad_width_bucket,
                 "gate_h4_range_usable": gate_range,
                 "gate_h4_state": gate_state,
                 "gate_h4_width": gate_width,
                 "gate_h4_method": gate_method,
                 "gate_h4_transition": gate_transition,
                 "gate_event_confidence": gate_conf,
+                "gate_expected_value": gate_expected_value,
+                "expected_value_mode": expected_value_mode,
+                "expected_target_price": target_price,
+                "expected_reward_rate": reward_rate,
+                "expected_cost_rate": cost_rate,
+                "reward_to_cost_ratio": reward_to_cost,
+                "box_width_pct": box_width_pct,
+                "event_base_confirms": float(out.at[i, "event_false_break_base_confirms"]) if "event_false_break_base_confirms" in out.columns and pd.notna(out.at[i, "event_false_break_base_confirms"]) else np.nan,
+                "entry_warmup": bool(fb_regime == "warmup"),
                 "gate_pass": gate_pass,
                 "blocked_reason": "|".join(reasons) if reasons else "",
                 "exec_signal": exec_signal,

@@ -183,8 +183,11 @@ def run_study(config_path: str = "config.yaml", outdir_override: str | None = No
     )
 
     # 5) Execution layer.
+    bt_cfg = BacktestConfig(**cfg["backtest"])
     exec_cfg_dict = dict(cfg["execution"])
     exec_cfg_dict["allow_states"] = tuple(exec_cfg_dict.get("allow_states", ["STABLE", "SQUEEZE"]))
+    if exec_cfg_dict.get("expected_value_round_trip_cost_rate") is None:
+        exec_cfg_dict["expected_value_round_trip_cost_rate"] = 2.0 * bt_cfg.leg_cost_rate()
     ex_cfg = ExecutionConfig(**exec_cfg_dict)
     execution_outputs = run_execution_engines(merged, ex_cfg)
     export_execution_tables(execution_outputs, str(out_dir))
@@ -195,7 +198,6 @@ def run_study(config_path: str = "config.yaml", outdir_override: str | None = No
     export_risk_tables(risk_outputs, str(out_dir))
 
     # 7) Backtest.
-    bt_cfg = BacktestConfig(**cfg["backtest"])
     backtest_outputs = run_backtest(
         risk_outputs["trades_false_break"],
         risk_outputs["trades_boundary"],

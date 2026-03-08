@@ -17,7 +17,7 @@ def _base_df() -> pd.DataFrame:
             "high": high,
             "low": low,
             "close": close,
-            "volume": 1.0,
+            "volume": [10.0] * 9,
             "segment_id": 0,
             "box_upper_edge": 100.0,
             "box_lower_edge": 90.0,
@@ -53,6 +53,59 @@ def test_false_break_detects_short_reentry():
     assert float(out.loc[3, "event_false_break_confidence"]) > 0.0
 
 
+
+def test_false_break_volume_confirmation_can_pass():
+    df = _base_df()
+    df.loc[2, "volume"] = 8.0
+    df.loc[3, "volume"] = 12.0
+    df.loc[3, "high"] = 100.5
+    out = detect_false_break_events(
+        df,
+        FalseBreakConfig(
+            min_confirmations=2,
+            reentry_window=3,
+            volume_confirmation_enabled=True,
+            volume_confirmation_mode="require",
+            volume_lookback=2,
+            volume_min_periods=2,
+            breakout_volume_max_ratio=1.0,
+            reentry_volume_min_ratio=1.0,
+            reentry_vs_breakout_min_ratio=1.2,
+        ),
+    )
+
+    assert int(out.loc[3, "event_false_break_signal"]) == -1
+    assert bool(out.loc[3, "fb_volume_confirmation"])
+    assert not bool(out.loc[3, "fb_volume_blocked"])
+
+
+
+def test_false_break_volume_confirmation_can_block():
+    df = _base_df()
+    df.loc[2, "volume"] = 25.0
+    df.loc[3, "volume"] = 8.0
+    df.loc[3, "high"] = 100.5
+    out = detect_false_break_events(
+        df,
+        FalseBreakConfig(
+            min_confirmations=2,
+            reentry_window=3,
+            volume_confirmation_enabled=True,
+            volume_confirmation_mode="require",
+            volume_lookback=2,
+            volume_min_periods=2,
+            breakout_volume_max_ratio=1.0,
+            reentry_volume_min_ratio=1.0,
+            reentry_vs_breakout_min_ratio=1.2,
+        ),
+    )
+
+    assert int(out.loc[3, "event_false_break_signal"]) == 0
+    assert not bool(out.loc[3, "fb_volume_confirmation"])
+    assert bool(out.loc[3, "fb_volume_blocked"])
+
+
+
 def test_box_initiation_detects_long_from_lower_edge():
     df = _base_df()
     out = detect_box_initiation_events(df, BoxInitiationConfig(min_confirmations=2))
@@ -60,3 +113,4 @@ def test_box_initiation_detects_long_from_lower_edge():
     long_count = int((out["event_box_init_signal"] == 1).sum())
     assert long_count >= 1
     assert out["event_box_init_confidence"].max() > 0.0
+

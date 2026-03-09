@@ -38,6 +38,16 @@ class ExecutionConfig:
     expected_value_mode: str = "to_midline"  # to_midline | to_opposite_edge
     min_reward_to_cost_ratio: float = 1.5
     expected_value_round_trip_cost_rate: float | None = None
+    capture_recovery_exec_conf_low_enabled: bool = False
+    capture_recovery_exec_conf_low_min_reward_to_cost: float = 3.0
+    capture_recovery_exec_conf_low_min_reentry_strength: float = 0.25
+    capture_recovery_confirm_near_miss_enabled: bool = False
+    capture_recovery_confirm_near_miss_exact_base_confirms: int = 1
+    capture_recovery_confirm_near_miss_min_box_confidence: float = 0.98
+    capture_recovery_confirm_near_miss_min_h4_method: float = 0.75
+    capture_recovery_confirm_near_miss_max_h4_transition: float = 0.08
+    capture_recovery_confirm_near_miss_min_reward_to_cost: float = 2.5
+    capture_recovery_confirm_near_miss_min_reentry_strength: float = 0.15
 
     def normalized_regime_mode(self) -> str:
         mode = str(self.false_break_regime_mode).strip().lower()
@@ -120,6 +130,90 @@ def _expected_value_metrics(raw_signal: int, row: pd.Series, cfg: ExecutionConfi
     return target_price, reward_rate, cost_rate, reward_to_cost, gate
 
 
+def _false_break_reentry_side(row: pd.Series) -> int:
+    reenter_up = bool(row.get("fb_reenter_from_up", False))
+    reenter_dn = bool(row.get("fb_reenter_from_down", False))
+    if reenter_dn and not reenter_up:
+        return 1
+    if reenter_up and not reenter_dn:
+        return -1
+    return 0
+
+
+def _false_break_reentry_strength(signal: int, row: pd.Series) -> float:
+    price = float(row.get("close", row.get("price", np.nan)))
+    mid = float(row.get("box_midline", np.nan))
+    lower = float(row.get("box_lower_edge", np.nan))
+    upper = float(row.get("box_upper_edge", np.nan))
+
+    if not np.isfinite(price) or not np.isfinite(mid):
+        return np.nan
+    if signal > 0 and np.isfinite(lower) and mid > lower:
+        return float(np.clip((price - lower) / (mid - lower), 0.0, np.inf))
+    if signal < 0 and np.isfinite(upper) and upper > mid:
+        return float(np.clip((upper - price) / (upper - mid), 0.0, np.inf))
+    return np.nan
+
+
+def _false_break_confirm_near_miss_signal(raw_signal: int, row: pd.Series, cfg: ExecutionConfig) -> int:
+    if raw_signal != 0 or not cfg.capture_recovery_confirm_near_miss_enabled:
+        return 0
+
+    side = _false_break_reentry_side(row)
+    base_confirms = float(row.get("event_false_break_base_confirms", np.nan))
+    if side == 0 or not np.isfinite(base_confirms):
+        return 0
+    return side if int(base_confirms) == int(cfg.capture_recovery_confirm_near_miss_exact_base_confirms) else 0
+
+
+def _exec_conf_low_recovery_ok(
+    raw_signal: int,
+    reasons: List[str],
+    reward_to_cost: float,
+    reentry_strength: float,
+    cfg: ExecutionConfig,
+) -> bool:
+    if not cfg.capture_recovery_exec_conf_low_enabled or raw_signal == 0:
+        return False
+    if reasons != ["event_confidence_low"]:
+        return False
+    if pd.isna(reward_to_cost) or reward_to_cost < cfg.capture_recovery_exec_conf_low_min_reward_to_cost:
+        return False
+    if not np.isfinite(reentry_strength) or reentry_strength < cfg.capture_recovery_exec_conf_low_min_reentry_strength:
+        return False
+    return True
+
+
+def _confirm_near_miss_recovery_ok(
+    recovery_signal: int,
+    row: pd.Series,
+    reward_to_cost: float,
+    reentry_strength: float,
+    cfg: ExecutionConfig,
+) -> bool:
+    if not cfg.capture_recovery_confirm_near_miss_enabled or recovery_signal == 0:
+        return False
+
+    base_confirms = float(row.get("event_false_break_base_confirms", np.nan))
+    box_confidence = float(row.get("box_confidence", np.nan))
+    h4_method = float(row.get("h4_method_agreement", np.nan))
+    h4_transition = float(row.get("h4_transition_risk", np.nan))
+
+    if not np.isfinite(base_confirms) or int(base_confirms) != int(cfg.capture_recovery_confirm_near_miss_exact_base_confirms):
+        return False
+    if not np.isfinite(box_confidence) or box_confidence < cfg.capture_recovery_confirm_near_miss_min_box_confidence:
+        return False
+    if not np.isfinite(h4_method) or h4_method < cfg.capture_recovery_confirm_near_miss_min_h4_method:
+        return False
+    if not np.isfinite(h4_transition) or h4_transition > cfg.capture_recovery_confirm_near_miss_max_h4_transition:
+        return False
+    if pd.isna(reward_to_cost) or reward_to_cost < cfg.capture_recovery_confirm_near_miss_min_reward_to_cost:
+        return False
+    if not np.isfinite(reentry_strength) or reentry_strength < cfg.capture_recovery_confirm_near_miss_min_reentry_strength:
+        return False
+    return True
+
+
 def align_4h_to_1h(
     bars_1h: pd.DataFrame,
     boxes_4h: pd.DataFrame,
@@ -200,6 +294,10 @@ def _run_single_engine(
             active_side = 0
 
         raw_signal = int(np.sign(out.at[i, signal_col])) if signal_col in out.columns else 0
+        recovery_candidate_signal = 0
+        if engine_name == "false_break":
+            recovery_candidate_signal = _false_break_confirm_near_miss_signal(raw_signal, out.iloc[i], cfg)
+        effective_signal_input = raw_signal if raw_signal != 0 else recovery_candidate_signal
         event_conf = float(out.at[i, confidence_col]) if confidence_col in out.columns else 0.0
         gate_range = bool(out.at[i, "h4_range_usable"]) if "h4_range_usable" in out.columns else False
         gate_state = str(out.at[i, "h4_box_state"]) in cfg.allow_states if "h4_box_state" in out.columns else False
@@ -216,7 +314,7 @@ def _run_single_engine(
 
         if engine_name == "false_break" and "fb_regime" in out.columns:
             gate_fb_regime = _false_break_regime_gate(regime_mode, fb_regime)
-            gate_fb_side_bias = not (cfg.false_break_up_long_only and fb_regime == "up" and raw_signal < 0)
+            gate_fb_side_bias = not (cfg.false_break_up_long_only and fb_regime == "up" and effective_signal_input < 0)
             gate_allow_warmup = cfg.allow_warmup_trades or fb_regime != "warmup"
         else:
             gate_fb_regime = True
@@ -232,55 +330,71 @@ def _run_single_engine(
         )
 
         target_price, reward_rate, cost_rate, reward_to_cost, gate_expected_value = _expected_value_metrics(
-            raw_signal, out.iloc[i], cfg
+            effective_signal_input, out.iloc[i], cfg
         )
+        reentry_strength = _false_break_reentry_strength(effective_signal_input, out.iloc[i]) if engine_name == "false_break" else np.nan
 
         reasons: List[str] = []
-        if raw_signal != 0 and not gate_range:
+        if effective_signal_input != 0 and not gate_range:
             reasons.append("h4_range_unusable")
-        if raw_signal != 0 and not gate_state:
+        if effective_signal_input != 0 and not gate_state:
             reasons.append("h4_state_blocked")
-        if raw_signal != 0 and not gate_width:
+        if effective_signal_input != 0 and not gate_width:
             reasons.append("h4_width_blocked")
-        if raw_signal != 0 and not gate_method:
+        if effective_signal_input != 0 and not gate_method:
             reasons.append("h4_method_blocked")
-        if raw_signal != 0 and not gate_transition:
+        if effective_signal_input != 0 and not gate_transition:
             reasons.append("h4_transition_blocked")
-        if raw_signal != 0 and not gate_conf:
+        if effective_signal_input != 0 and not gate_conf:
             reasons.append("event_confidence_low")
-        if raw_signal != 0 and engine_name == "false_break" and not gate_fb_regime:
+        if effective_signal_input != 0 and engine_name == "false_break" and not gate_fb_regime:
             reasons.append("regime_blocked")
-        if raw_signal != 0 and engine_name == "false_break" and not gate_fb_side_bias:
+        if effective_signal_input != 0 and engine_name == "false_break" and not gate_fb_side_bias:
             reasons.append("up_long_only")
-        if raw_signal != 0 and engine_name == "false_break" and not gate_allow_warmup:
+        if effective_signal_input != 0 and engine_name == "false_break" and not gate_allow_warmup:
             reasons.append("warmup_blocked")
-        if raw_signal != 0 and engine_name == "false_break" and not gate_bad_width_bucket:
+        if effective_signal_input != 0 and engine_name == "false_break" and not gate_bad_width_bucket:
             reasons.append("bad_width_bucket_blocked")
-        if raw_signal != 0 and cfg.expected_value_filter_enabled and not gate_expected_value:
+        if effective_signal_input != 0 and cfg.expected_value_filter_enabled and not gate_expected_value:
             reasons.append("expected_value_blocked")
 
-        if raw_signal != 0 and i - last_side_entry[raw_signal] < cooldown_bars:
+        if effective_signal_input != 0 and i - last_side_entry[effective_signal_input] < cooldown_bars:
             reasons.append("side_cooldown")
 
-        if raw_signal != 0 and i < active_until:
+        if effective_signal_input != 0 and i < active_until:
             reasons.append("overlap_open_position")
 
-        if raw_signal != 0 and active_side != 0 and active_side != raw_signal and event_conf < (confidence_min + 0.15):
+        if effective_signal_input != 0 and active_side != 0 and active_side != effective_signal_input and event_conf < (confidence_min + 0.15):
             reasons.append("opposite_overlap_blocked")
 
-        gate_pass = raw_signal != 0 and len(reasons) == 0
-        exec_signal = raw_signal if gate_pass else 0
+        capture_recovery_reason = ""
+        if engine_name == "false_break" and "event_confidence_low" in reasons:
+            if _exec_conf_low_recovery_ok(raw_signal, reasons, reward_to_cost, reentry_strength, cfg):
+                reasons = [r for r in reasons if r != "event_confidence_low"]
+                capture_recovery_reason = "exec_conf_low"
+            elif raw_signal == 0 and _confirm_near_miss_recovery_ok(
+                recovery_candidate_signal, out.iloc[i], reward_to_cost, reentry_strength, cfg
+            ):
+                reasons = [r for r in reasons if r != "event_confidence_low"]
+                capture_recovery_reason = "confirm_near_miss"
 
-        if gate_pass and raw_signal != 0:
-            active_side = raw_signal
+        gate_pass = effective_signal_input != 0 and len(reasons) == 0
+        exec_signal = effective_signal_input if gate_pass else 0
+
+        if gate_pass and effective_signal_input != 0:
+            active_side = effective_signal_input
             active_until = i + max(1, cooldown_bars)
-            last_side_entry[raw_signal] = i
+            last_side_entry[effective_signal_input] = i
 
         rows.append(
             {
                 "timestamp": out.at[i, "timestamp"],
                 "engine": engine_name,
                 "raw_signal": raw_signal,
+                "capture_recovery_candidate_signal": recovery_candidate_signal,
+                "effective_signal_input": effective_signal_input,
+                "capture_recovery_used": bool(capture_recovery_reason),
+                "capture_recovery_reason": capture_recovery_reason,
                 "event_confidence": event_conf,
                 "fb_regime": fb_regime,
                 "fb_regime_ret": fb_regime_ret,
@@ -300,6 +414,7 @@ def _run_single_engine(
                 "expected_reward_rate": reward_rate,
                 "expected_cost_rate": cost_rate,
                 "reward_to_cost_ratio": reward_to_cost,
+                "reentry_strength": reentry_strength,
                 "box_width_pct": box_width_pct,
                 "event_base_confirms": float(out.at[i, "event_false_break_base_confirms"]) if "event_false_break_base_confirms" in out.columns and pd.notna(out.at[i, "event_false_break_base_confirms"]) else np.nan,
                 "entry_warmup": bool(fb_regime == "warmup"),

@@ -242,3 +242,145 @@ def test_bad_width_bucket_filter_only_blocks_target_bucket():
     assert int(out.loc[0, "exec_signal"]) == 0
     assert "bad_width_bucket_blocked" in str(out.loc[0, "blocked_reason"])
     assert int(out.loc[1, "exec_signal"]) == 1
+
+
+
+def test_exec_conf_low_recovery_is_optional_and_records_reason():
+    ts = pd.date_range("2024-01-01 00:00:00", periods=3, freq="1h", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "timestamp": ts,
+            "open": [100.0, 100.0, 100.0],
+            "high": [101.0, 101.2, 101.0],
+            "low": [99.0, 99.8, 99.5],
+            "close": [100.0, 100.8, 100.0],
+            "box_midline": [101.4] * 3,
+            "box_upper_edge": [103.0] * 3,
+            "box_lower_edge": [97.0] * 3,
+            "box_width": [6.0] * 3,
+            "box_width_pct": [0.02] * 3,
+            "box_confidence": [0.83] * 3,
+            "box_state": ["STABLE"] * 3,
+            "fb_reenter_from_up": [False] * 3,
+            "fb_reenter_from_down": [False, True, False],
+            "event_false_break_signal": [0, 1, 0],
+            "event_false_break_confidence": [0.0, 0.42, 0.0],
+            "event_false_break_base_confirms": [0, 2, 0],
+            "event_box_init_signal": [0, 0, 0],
+            "event_box_init_confidence": [0.0, 0.0, 0.0],
+            "h4_range_usable": [True] * 3,
+            "h4_box_state": ["STABLE"] * 3,
+            "h4_box_width_pct": [0.02] * 3,
+            "h4_method_agreement": [0.8] * 3,
+            "h4_transition_risk": [0.05] * 3,
+        }
+    )
+
+    base_cfg = ExecutionConfig(false_break_regime_mode="all", allow_warmup_trades=True, side_cooldown_bars_false_break=0)
+    rec_cfg = ExecutionConfig(
+        false_break_regime_mode="all",
+        allow_warmup_trades=True,
+        side_cooldown_bars_false_break=0,
+        capture_recovery_exec_conf_low_enabled=True,
+    )
+
+    base = run_execution_engines(df, base_cfg)["false_break"]
+    rec = run_execution_engines(df, rec_cfg)["false_break"]
+
+    assert int(base.loc[1, "exec_signal"]) == 0
+    assert "event_confidence_low" in str(base.loc[1, "blocked_reason"])
+    assert int(rec.loc[1, "exec_signal"]) == 1
+    assert bool(rec.loc[1, "capture_recovery_used"])
+    assert rec.loc[1, "capture_recovery_reason"] == "exec_conf_low"
+
+
+
+def test_confirm_near_miss_recovery_is_causal_and_stays_in_strong_context():
+    ts = pd.date_range("2024-01-01 00:00:00", periods=4, freq="1h", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "timestamp": ts,
+            "open": [100.0, 100.0, 100.0, 100.0],
+            "high": [101.0, 101.1, 120.0, 121.0],
+            "low": [99.0, 99.8, 99.0, 99.0],
+            "close": [100.0, 100.9, 100.0, 100.0],
+            "box_midline": [101.2] * 4,
+            "box_upper_edge": [103.0] * 4,
+            "box_lower_edge": [97.0] * 4,
+            "box_width": [6.0] * 4,
+            "box_width_pct": [0.02] * 4,
+            "box_confidence": [0.99] * 4,
+            "box_state": ["STABLE"] * 4,
+            "fb_reenter_from_up": [False] * 4,
+            "fb_reenter_from_down": [False, True, False, False],
+            "event_false_break_signal": [0, 0, 0, 0],
+            "event_false_break_confidence": [0.0, 0.0, 0.0, 0.0],
+            "event_false_break_base_confirms": [0, 1, 0, 0],
+            "event_box_init_signal": [0, 0, 0, 0],
+            "event_box_init_confidence": [0.0, 0.0, 0.0, 0.0],
+            "h4_range_usable": [True] * 4,
+            "h4_box_state": ["STABLE"] * 4,
+            "h4_box_width_pct": [0.02] * 4,
+            "h4_method_agreement": [0.8] * 4,
+            "h4_transition_risk": [0.05] * 4,
+        }
+    )
+    cfg = ExecutionConfig(
+        false_break_regime_mode="all",
+        allow_warmup_trades=True,
+        side_cooldown_bars_false_break=0,
+        capture_recovery_confirm_near_miss_enabled=True,
+    )
+
+    full = run_execution_engines(df, cfg)["false_break"]
+    prefix = run_execution_engines(df.iloc[:2].copy(), cfg)["false_break"]
+
+    assert int(full.loc[1, "exec_signal"]) == 1
+    assert int(prefix.loc[1, "exec_signal"]) == 1
+    assert full.loc[1, "capture_recovery_reason"] == "confirm_near_miss"
+    assert prefix.loc[1, "capture_recovery_reason"] == "confirm_near_miss"
+
+
+
+def test_confirm_near_miss_recovery_does_not_bypass_other_gates():
+    ts = pd.date_range("2024-01-01 00:00:00", periods=3, freq="1h", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "timestamp": ts,
+            "open": [100.0, 100.0, 100.0],
+            "high": [101.0, 101.1, 101.0],
+            "low": [99.0, 99.8, 99.5],
+            "close": [100.0, 100.9, 100.0],
+            "box_midline": [101.2] * 3,
+            "box_upper_edge": [103.0] * 3,
+            "box_lower_edge": [97.0] * 3,
+            "box_width": [6.0] * 3,
+            "box_width_pct": [0.02] * 3,
+            "box_confidence": [0.99] * 3,
+            "box_state": ["STABLE"] * 3,
+            "fb_reenter_from_up": [False] * 3,
+            "fb_reenter_from_down": [False, True, False],
+            "event_false_break_signal": [0, 0, 0],
+            "event_false_break_confidence": [0.0, 0.0, 0.0],
+            "event_false_break_base_confirms": [0, 1, 0],
+            "event_box_init_signal": [0, 0, 0],
+            "event_box_init_confidence": [0.0, 0.0, 0.0],
+            "h4_range_usable": [True] * 3,
+            "h4_box_state": ["STABLE"] * 3,
+            "h4_box_width_pct": [0.02] * 3,
+            "h4_method_agreement": [0.7] * 3,
+            "h4_transition_risk": [0.09] * 3,
+        }
+    )
+    cfg = ExecutionConfig(
+        false_break_regime_mode="all",
+        allow_warmup_trades=True,
+        side_cooldown_bars_false_break=0,
+        capture_recovery_confirm_near_miss_enabled=True,
+    )
+
+    out = run_execution_engines(df, cfg)["false_break"]
+    assert int(out.loc[1, "capture_recovery_candidate_signal"]) == 1
+    assert int(out.loc[1, "exec_signal"]) == 0
+    assert "event_confidence_low" in str(out.loc[1, "blocked_reason"])
+    assert not bool(out.loc[1, "capture_recovery_used"])

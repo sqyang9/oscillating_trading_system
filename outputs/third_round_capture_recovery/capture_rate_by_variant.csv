@@ -1,0 +1,7 @@
+variant,trades,capture_rate_in_tradable,execution_capture_rate,price_stop_count,time_stop_max_count,state_stop_count,baseline_trades_retained,baseline_trades_lost,new_trades_added,missed_good_candidate_recovery_count,newly_introduced_bad_trade_count,new_price_stop_count
+baseline_master_current,117,0.029693782864212804,0.04856170739251469,49,42,3,117,0,0,0,0,0
+variant_capture_audit_only,117,0.029693782864212804,0.04856170739251469,49,42,3,117,0,0,0,0,0
+variant_near_miss_recovery_2,117,0.029693782864212804,0.04856170739251469,49,42,3,117,0,0,0,0,0
+variant_soft_confirm_strong_context,117,0.029693782864212804,0.04856170739251469,49,42,3,117,0,0,0,0,0
+variant_near_miss_recovery_1,127,0.031549644293226105,0.054129291679554596,55,41,3,107,10,20,7,18,13
+variant_best_effort_capture_recovery,127,0.031549644293226105,0.054129291679554596,55,41,3,107,10,20,7,18,13

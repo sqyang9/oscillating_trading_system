@@ -1,0 +1,19 @@
+variant,semantics,layer,reason,reason_hits
+baseline_master_current,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,event,missing_reentry,2821
+baseline_master_current,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,confirm,base_confirms_0,5
+baseline_master_current,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,confirm,base_confirms_1,124
+variant_capture_audit_only,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,event,missing_reentry,2821
+variant_capture_audit_only,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,confirm,base_confirms_0,5
+variant_capture_audit_only,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,confirm,base_confirms_1,124
+variant_near_miss_recovery_1,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,event,missing_reentry,2821
+variant_near_miss_recovery_1,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,confirm,base_confirms_0,5
+variant_near_miss_recovery_1,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,confirm,base_confirms_1,124
+variant_near_miss_recovery_2,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,event,missing_reentry,2821
+variant_near_miss_recovery_2,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,confirm,base_confirms_0,5
+variant_near_miss_recovery_2,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,confirm,base_confirms_1,124
+variant_soft_confirm_strong_context,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,event,missing_reentry,2821
+variant_soft_confirm_strong_context,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,confirm,base_confirms_0,5
+variant_soft_confirm_strong_context,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,confirm,base_confirms_1,124
+variant_best_effort_capture_recovery,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,event,missing_reentry,2821
+variant_best_effort_capture_recovery,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,confirm,base_confirms_0,5
+variant_best_effort_capture_recovery,These counts are overlapping reason hits and should not be interpreted as mutually exclusive blocker totals.,confirm,base_confirms_1,124

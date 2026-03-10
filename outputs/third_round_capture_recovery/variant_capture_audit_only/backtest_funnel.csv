@@ -1,0 +1,11 @@
+engine,stage,count
+false_break,raw_signal,3303
+false_break,after_execution_gate,180
+false_break,risk_entry_accepted,117
+false_break,risk_entry_blocked,63
+false_break,closed_trade,117
+boundary,raw_signal,48141
+boundary,after_execution_gate,4268
+boundary,risk_entry_accepted,1327
+boundary,risk_entry_blocked,2941
+boundary,closed_trade,1327

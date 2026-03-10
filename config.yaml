@@ -74,6 +74,16 @@ execution:
   expected_value_mode: to_midline
   min_reward_to_cost_ratio: 1.5
   expected_value_round_trip_cost_rate: null
+  capture_recovery_exec_conf_low_enabled: false
+  capture_recovery_exec_conf_low_min_reward_to_cost: 3.0
+  capture_recovery_exec_conf_low_min_reentry_strength: 0.25
+  capture_recovery_confirm_near_miss_enabled: false
+  capture_recovery_confirm_near_miss_exact_base_confirms: 1
+  capture_recovery_confirm_near_miss_min_box_confidence: 0.98
+  capture_recovery_confirm_near_miss_min_h4_method: 0.75
+  capture_recovery_confirm_near_miss_max_h4_transition: 0.08
+  capture_recovery_confirm_near_miss_min_reward_to_cost: 2.5
+  capture_recovery_confirm_near_miss_min_reentry_strength: 0.15
 
 risk:
   atr_window: 14

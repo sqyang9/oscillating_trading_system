@@ -1,0 +1,5 @@
+variant,preserve_high_trades,oracle_high_upside_rate,hopeless_contamination_rate,mixed_rate,removed_fragile_hopeless,removed_fragile_mixed,removed_fragile_high_upside
+control,20,0.35,0.2,0.45,0,0,0
+prior_preserve_first,20,0.35,0.2,0.45,5,1,0
+refined_preserve_variant,18,0.3888888888888889,0.1111111111111111,0.5,7,1,0
+experimental_narrow_candidate,18,0.3888888888888889,0.1111111111111111,0.5,7,1,0

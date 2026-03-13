@@ -12,5 +12,8 @@ Contents:
 - `robustness_check.csv`: final mini robustness table
 - `equity_comparison.html` and `drawdown_comparison.html`: interactive comparison visuals
 - bar-chart PNGs for return, drawdown, trade count, and price_stop counts
+- `code/`: helper, study, and test Python files for the completed first line
+
+The Python files in `code/` are published copies. The working originals remain at repository top level so the archived line stays reproducible without changing import paths.
 
 This line is frozen here. Future work should start from a separate new 1H research line.
